@@ -10,7 +10,7 @@ import { postBySlugQuery, postSlugsQuery } from "@/sanity/lib/queries";
 import { imageUrl } from "@/sanity/lib/image";
 import { Post } from "@/types";
 
-export const revalidate = 60;
+export const revalidate = 1;
 
 export async function generateStaticParams() {
   const slugs: string[] = await client.fetch(postSlugsQuery);

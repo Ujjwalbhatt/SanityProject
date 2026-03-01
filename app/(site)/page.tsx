@@ -23,8 +23,8 @@ export const metadata: Metadata = {
   description: "The all-in-one platform for modern teams.",
 };
 
-// Revalidate every 60 seconds so new content (posts, site settings) shows without redeploying
-export const revalidate = 60;
+// Revalidate every 1 second so new content shows almost instantly
+export const revalidate = 1;
 
 // ─── Default global components (shown before Site Settings has content) ───────
 
