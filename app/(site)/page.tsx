@@ -3,7 +3,7 @@
 // Uses global components (Hero, CTA, Features, Logo Bar) from Site Settings — edit once, use everywhere.
 // Testimonials, Pricing, FAQ come from their own document types.
 
-import Link from "next/link";  
+import Link from "next/link";   
 import Image from "next/image";
 import type { Metadata } from "next";
 import { draftMode } from "next/headers";
