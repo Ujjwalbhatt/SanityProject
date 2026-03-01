@@ -14,7 +14,6 @@ export const ctaSectionSchema = defineType({
             type: "string",
             description: "e.g. 'Ready to ship' — separately editable in visual editing",
             initialValue: "Ready to ship",
-            validation: (Rule) => Rule.required(),
         }),
         defineField({
             name: "headingHighlight",

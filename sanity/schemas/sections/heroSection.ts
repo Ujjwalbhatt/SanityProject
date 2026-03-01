@@ -19,7 +19,7 @@ export const heroSectionSchema = defineType({
             title: "Heading (before highlight)",
             type: "string",
             description: "e.g. 'Build and launch your' — each part is separately editable in visual editing",
-            validation: (Rule) => Rule.required(),
+            initialValue: "Build and launch your",
         }),
         defineField({
             name: "headingHighlight",
