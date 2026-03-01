@@ -13,6 +13,9 @@ export const metadata: Metadata = {
   description: "Insights, tutorials, and product updates from the SaaSify team.",
 };
 
+// Revalidate every 60 seconds so new posts show without redeploying
+export const revalidate = 60;
+
 export default async function BlogPage() {
   const { isEnabled: isDraftMode } = await draftMode();
   const sanityClient = isDraftMode ? draftClient : client;
