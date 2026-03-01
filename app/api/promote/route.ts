@@ -1,7 +1,8 @@
 // app/api/promote/route.ts
 //
 // This API route copies a document from the STAGING dataset → PRODUCTION dataset.
-// It is called by the custom "Promote to Production" button in Sanity Studio.
+// It also copies all referenced documents (images, authors, etc.) so promotion works
+// for posts with main images, author avatars, inline images, etc.
 
 import { NextRequest, NextResponse } from "next/server";
 
@@ -12,78 +13,138 @@ const STAGING_DATASET = process.env.NEXT_PUBLIC_SANITY_DATASET || "staging";
 const PROD_DATASET = process.env.SANITY_PRODUCTION_DATASET || "production";
 const API_VERSION = "2024-01-01";
 
-export async function POST(req: NextRequest) {
-    try {
-        if (!API_TOKEN) {
-            return NextResponse.json(
-                { error: "Missing SANITY_API_TOKEN or SANITY_API_READ_TOKEN — add one in Vercel env vars" },
-                { status: 500 }
-            );
-        }
+function queryUrl(dataset: string, documentId: string): string {
+  // Use parameterized query to safely pass document ID (handles special chars)
+  const query = `*[_id == $id][0]`;
+  const params = `$id=${encodeURIComponent(JSON.stringify(documentId))}`;
+  return `https://${PROJECT_ID}.api.sanity.io/v${API_VERSION}/data/query/${dataset}?query=${encodeURIComponent(query)}&${params}`;
+}
 
-        const { documentId } = await req.json();
+function mutateUrl(dataset: string): string {
+  return `https://${PROJECT_ID}.api.sanity.io/v${API_VERSION}/data/mutate/${dataset}`;
+}
 
-        if (!documentId) {
-            return NextResponse.json({ error: "documentId is required" }, { status: 400 });
-        }
+/** Recursively collect all _ref document IDs from an object */
+function collectRefs(obj: unknown, refs: Set<string>): void {
+  if (obj == null) return;
+  if (typeof obj !== "object") return;
 
-        // Step 1: Fetch the published document from staging
-        const stagingUrl = `https://${PROJECT_ID}.api.sanity.io/v${API_VERSION}/data/query/${STAGING_DATASET}?query=*[_id=="${documentId}"][0]`;
+  if (Array.isArray(obj)) {
+    obj.forEach((item) => collectRefs(item, refs));
+    return;
+  }
 
-        const stagingRes = await fetch(stagingUrl, {
-            headers: { Authorization: `Bearer ${API_TOKEN}` },
-        });
+  const rec = obj as Record<string, unknown>;
+  if (typeof rec._ref === "string") {
+    refs.add(rec._ref);
+  }
+  Object.values(rec).forEach((v) => collectRefs(v, refs));
+}
 
-        if (!stagingRes.ok) {
-            throw new Error(`Failed to fetch from staging: ${stagingRes.statusText}`);
-        }
+async function fetchDoc(dataset: string, id: string): Promise<Record<string, unknown> | null> {
+  const url = queryUrl(dataset, id);
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${API_TOKEN}` },
+  });
+  if (!res.ok) return null;
+  const { result } = await res.json();
+  return result;
+}
 
-        const { result: doc } = await stagingRes.json();
+async function writeDoc(dataset: string, doc: Record<string, unknown>): Promise<void> {
+  const id = doc._id as string;
+  const url = mutateUrl(dataset);
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${API_TOKEN}`,
+    },
+    body: JSON.stringify({
+      mutations: [{ createOrReplace: { ...doc, _id: id } }],
+    }),
+  });
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Failed to write "${id}" to ${dataset}: ${errText}`);
+  }
+}
 
-        if (!doc) {
-            return NextResponse.json(
-                { error: `Document "${documentId}" not found in staging. Make sure it's published first.` },
-                { status: 404 }
-            );
-        }
+/** Recursively ensure a document and all its references exist in production */
+async function ensureInProduction(
+  id: string,
+  copied: Set<string>,
+): Promise<void> {
+  if (copied.has(id)) return;
 
-        // Step 2: Write the document to production using Sanity's Mutations API
-        const prodUrl = `https://${PROJECT_ID}.api.sanity.io/v${API_VERSION}/data/mutate/${PROD_DATASET}`;
+  const doc = await fetchDoc(STAGING_DATASET, id);
+  if (!doc) {
+    // Ref might point to something that doesn't exist — skip
+    return;
+  }
 
-        const prodRes = await fetch(prodUrl, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${API_TOKEN}`,
-            },
-            body: JSON.stringify({
-                mutations: [
-                    {
-                        // createOrReplace upserts — creates if new, replaces if already exists
-                        createOrReplace: {
-                            ...doc,
-                            _id: documentId, // keep the same ID in production
-                        },
-                    },
-                ],
-            }),
-        });
+  const refs = new Set<string>();
+  collectRefs(doc, refs);
 
-        if (!prodRes.ok) {
-            const errText = await prodRes.text();
-            throw new Error(`Failed to write to production: ${errText}`);
-        }
-
-        const result = await prodRes.json();
-
-        return NextResponse.json({
-            success: true,
-            message: `Document "${documentId}" promoted to production successfully!`,
-            result,
-        });
-    } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : "Unknown error";
-        console.error("[Promote API Error]", message);
-        return NextResponse.json({ error: message }, { status: 500 });
+  // Copy dependencies first
+  for (const refId of refs) {
+    if (refId !== id) {
+      await ensureInProduction(refId, copied);
     }
+  }
+
+  await writeDoc(PROD_DATASET, doc);
+  copied.add(id);
+}
+
+export async function POST(req: NextRequest) {
+  try {
+    if (!API_TOKEN) {
+      return NextResponse.json(
+        { error: "Missing SANITY_API_TOKEN or SANITY_API_READ_TOKEN — add one in Vercel env vars" },
+        { status: 500 }
+      );
+    }
+
+    const { documentId } = await req.json();
+
+    if (!documentId) {
+      return NextResponse.json({ error: "documentId is required" }, { status: 400 });
+    }
+
+    // Normalize ID — Sanity can pass "drafts.xxx" or "xxx", we need the published id
+    const id = String(documentId).startsWith("drafts.")
+      ? String(documentId).slice(7)
+      : String(documentId);
+
+    const doc = await fetchDoc(STAGING_DATASET, id);
+    if (!doc) {
+      return NextResponse.json(
+        { error: `Document "${id}" not found in staging. Make sure it's published first.` },
+        { status: 404 }
+      );
+    }
+
+    const copied = new Set<string>();
+
+    // Copy all referenced documents (images, authors, etc.) to production first
+    const refs = new Set<string>();
+    collectRefs(doc, refs);
+    for (const refId of refs) {
+      await ensureInProduction(refId, copied);
+    }
+
+    // Copy the main document
+    await ensureInProduction(id, copied);
+
+    return NextResponse.json({
+      success: true,
+      message: `Document "${id}" and ${copied.size} referenced document(s) promoted to production!`,
+      result: { documentsPromoted: copied.size },
+    });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Unknown error";
+    console.error("[Promote API Error]", message);
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
 }
