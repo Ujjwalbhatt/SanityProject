@@ -5,7 +5,7 @@
 
 import Link from "next/link";   
 import Image from "next/image";
-import type { Metadata } from "next";
+import type { Metadata } from "next"; 
 import { draftMode } from "next/headers";
 import { client } from "@/sanity/lib/client";
 import { draftClient } from "@/sanity/lib/draftClient";
