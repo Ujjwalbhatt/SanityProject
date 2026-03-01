@@ -6,13 +6,21 @@
 import { NextRequest, NextResponse } from "next/server";
 
 const PROJECT_ID = process.env.NEXT_PUBLIC_SANITY_PROJECT_ID!;
-const API_TOKEN = process.env.SANITY_API_TOKEN!;
+// Use SANITY_API_TOKEN (read+write) or fall back to SANITY_API_READ_TOKEN
+const API_TOKEN = process.env.SANITY_API_TOKEN || process.env.SANITY_API_READ_TOKEN;
 const STAGING_DATASET = process.env.NEXT_PUBLIC_SANITY_DATASET || "staging";
 const PROD_DATASET = process.env.SANITY_PRODUCTION_DATASET || "production";
 const API_VERSION = "2024-01-01";
 
 export async function POST(req: NextRequest) {
     try {
+        if (!API_TOKEN) {
+            return NextResponse.json(
+                { error: "Missing SANITY_API_TOKEN or SANITY_API_READ_TOKEN — add one in Vercel env vars" },
+                { status: 500 }
+            );
+        }
+
         const { documentId } = await req.json();
 
         if (!documentId) {
