@@ -1,0 +1,4 @@
+/* Tailwind's three base layers — always needed at the top of your global CSS */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
